@@ -267,7 +267,7 @@ func TestCPUPacketStream(t *testing.T) {
 		}
 	})
 	t.Run("recv", func(t *testing.T) {
-		if _, err := p.Write(testPacket(t, uint64(p.NID()))); err != nil {
+		if _, err := p.Write(createPacket(t, uint64(p.NID()))); err != nil {
 			t.Fatal(err)
 		}
 		got, err := s.Recv()
@@ -286,7 +286,8 @@ func TestCPUPacketStream(t *testing.T) {
 	})
 }
 
-func testPacket(t testing.TB, nid uint64) fwdpacket.Packet {
+func createPacket(t testing.TB, nid uint64) fwdpacket.Packet {
+	t.Helper()
 	eth := &layers.Ethernet{
 		SrcMAC:       parseMac(t, "00:00:00:00:00:01"),
 		DstMAC:       parseMac(t, "00:00:00:00:00:02"),
