@@ -98,6 +98,7 @@ func createGRIBIServer(gClient gpb.GNMIClient, target string, root *oc.Root, sys
 	}
 
 	ribHookfn := func(o constants.OpType, _ int64, ni string, data ygot.ValidatedGoStruct) {
+		log.Warning("Getting into ribhookfn")
 		if o != constants.Add {
 			// TODO(wenbli): handle replace and delete :-)
 			return
@@ -116,6 +117,7 @@ func createGRIBIServer(gClient gpb.GNMIClient, target string, root *oc.Root, sys
 	}
 
 	ribAddfn := func(ribs map[string]*aft.RIB, optype constants.OpType, netinst string, aft constants.AFT, key any, _ ...rib.ResolvedDetails) {
+		log.Warning("Getting into ribAddfn")
 		prefix, ok := key.(string)
 		if !ok {
 			log.Errorf("Key is not a string type: (%T, %v)", key, key)

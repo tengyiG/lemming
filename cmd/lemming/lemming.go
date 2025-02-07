@@ -43,6 +43,7 @@ func main() {
 	pflag.Parse()
 	viper.BindPFlags(pflag.CommandLine)
 
+  log.Warning("getting into the lemming")
 	creds := insecure.NewCredentials()
 	if *tlsCertFile != "" && *tlsKeyFile != "" {
 		var err error
