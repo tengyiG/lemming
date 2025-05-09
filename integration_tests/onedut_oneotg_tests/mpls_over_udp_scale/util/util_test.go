@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -275,24 +276,27 @@ func TestMPLSLabelToPacketBytes(t *testing.T) {
 // TestGenerateScaleProfileEntries tests both validation and correct generation.
 func TestGenerateScaleProfileEntries(t *testing.T) {
 	// Define a valid config with specific encap details for the 'want' case
+	validBaseName := "VRF"
 	validCfg := &ScaleProfileConfig{
-		AddrFamily:          "ipv6",
-		NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-		NumPrefixes:         2,
-		NumNexthopGroup:     2,
-		NumNexthopPerNHG:    2,
-		PrefixStart:         "2001:db8::/64",
-		UseSameMPLSLabel:    true,
-		MPLSLabelStart:      100,
-		UDPSrcPort:          5000,
-		UDPDstPort:          6000,
-		SrcIP:               "2001:db8:f::1",
-		DstIPStart:          "2001:db8:d::1",
-		NumDstIP:            2,
-		DSCP:                46,
-		IPTTL:               64,
-		EgressATEIPv6:       "2001:db8:a::2",
+		AddrFamily:              "ipv6",
+		NumNetworkInstances:     2,
+		NetworkInstanceBaseName: validBaseName,
+		NumPrefixes:             2,
+		NumNexthopGroup:         2,
+		NumNexthopPerNHG:        2,
+		PrefixStart:             "2001:db8::/64",
+		UseSameMPLSLabel:        false,
+		MPLSLabelStart:          100,
+		UDPSrcPort:              5000,
+		UDPDstPort:              6000,
+		SrcIP:                   "2001:db8:f::1",
+		DstIPStart:              "2001:db8:d::1",
+		NumDstIP:                2,
+		DSCP:                    46,
+		IPTTL:                   64,
+		EgressATEIPv6:           "2001:db8:a::2",
 	}
+	secondNIName := fmt.Sprintf("%s-%d", validBaseName, 1)
 
 	tests := []struct {
 		desc           string
@@ -303,7 +307,7 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 		wantSubErrStr  string
 	}{
 		{
-			desc: "valid config",
+			desc: "valid config - multi NI",
 			cfg:  validCfg,
 			wantNHs: []fluent.GRIBIEntry{
 				fluent.NextHopEntry().
@@ -329,22 +333,22 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 							WithDSCP(46).WithIPTTL(64),
 					),
 				fluent.NextHopEntry().
-					WithNetworkInstance(fakedevice.DefaultNetworkInstance).
+					WithNetworkInstance(secondNIName).
 					WithIndex(3).
 					WithIPAddress(validCfg.EgressATEIPv6).
 					AddEncapHeader(
-						fluent.MPLSEncapHeader().WithLabels(100),
+						fluent.MPLSEncapHeader().WithLabels(101),
 						fluent.UDPV6EncapHeader().
 							WithDstUDPPort(6000).WithSrcUDPPort(5000).
 							WithSrcIP(validCfg.SrcIP).WithDstIP("2001:db8:d::1").
 							WithDSCP(46).WithIPTTL(64),
 					),
 				fluent.NextHopEntry().
-					WithNetworkInstance(fakedevice.DefaultNetworkInstance).
+					WithNetworkInstance(secondNIName).
 					WithIndex(4).
 					WithIPAddress(validCfg.EgressATEIPv6).
 					AddEncapHeader(
-						fluent.MPLSEncapHeader().WithLabels(100),
+						fluent.MPLSEncapHeader().WithLabels(101),
 						fluent.UDPV6EncapHeader().
 							WithDstUDPPort(6000).WithSrcUDPPort(5000).
 							WithSrcIP(validCfg.SrcIP).WithDstIP("2001:db8:d::2").
@@ -355,11 +359,11 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 				fluent.NextHopGroupEntry().
 					WithNetworkInstance(fakedevice.DefaultNetworkInstance).
 					WithID(1).
-					AddNextHop(1, 1).AddNextHop(2, 2),
+					AddNextHop(1, 1).AddNextHop(2, 1),
 				fluent.NextHopGroupEntry().
-					WithNetworkInstance(fakedevice.DefaultNetworkInstance).
+					WithNetworkInstance(secondNIName).
 					WithID(2).
-					AddNextHop(3, 1).AddNextHop(4, 2),
+					AddNextHop(3, 1).AddNextHop(4, 1),
 			},
 			wantV6Prefixes: []fluent.GRIBIEntry{
 				fluent.IPv6Entry().
@@ -367,113 +371,137 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 					WithPrefix("2001:db8::/128").
 					WithNextHopGroup(1),
 				fluent.IPv6Entry().
-					WithNetworkInstance(fakedevice.DefaultNetworkInstance).
-					WithPrefix("2001:db8::1/128").
+					WithNetworkInstance(secondNIName).
+					WithPrefix("2001:db8::/128").
 					WithNextHopGroup(2),
 			},
 		},
 		{
-			desc: "invalid NetworkInstanceName",
+			desc: "invalid NumNetworkInstances",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: "", // Invalid
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     0,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
-			wantSubErrStr: "NetworkInstanceName",
+			wantSubErrStr: "NumNetworkInstances",
+		},
+		{
+			desc: "invalid NetworkInstanceBaseName",
+			cfg: &ScaleProfileConfig{
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: "", // Invalid
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
+			},
+			wantSubErrStr: "NetworkInstanceBaseName",
 		},
 		{
 			desc: "invalid NumPrefixes",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         0, // Invalid
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             0, // Invalid
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "NumPrefixes",
 		},
 		{
 			desc: "invalid NumNexthopGroup",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         1,
-				NumNexthopGroup:     0, // Invalid
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             1,
+				NumNexthopGroup:         0, // Invalid
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "NumNexthopGroup",
 		},
 		{
 			desc: "invalid NumNexthopPerNHG",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         1,
-				NumNexthopGroup:     1,
-				NumNexthopPerNHG:    0, // Invalid
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             1,
+				NumNexthopGroup:         1,
+				NumNexthopPerNHG:        0, // Invalid
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "NumNexthopPerNHG",
 		},
 		{
 			desc: "invalid AddrFamily",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv4", // Invalid
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         1,
-				NumNexthopGroup:     1,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv4", // Invalid
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             1,
+				NumNexthopGroup:         1,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "AddrFamily",
 		},
 		{
 			desc: "invalid PrefixStart",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         "2001:db8:::::/64", // Invalid
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             "2001:db8:::::/64", // Invalid
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "invalid PrefixStart",
 		},
 		{
 			desc: "addr family mismatch",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10, NumNexthopGroup: 10, NumNexthopPerNHG: 1,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10, NumNexthopGroup: 10, NumNexthopPerNHG: 1,
 				PrefixStart:   "192.0.2.0/24", // IPv4
 				UDPSrcPort:    5000,
 				UDPDstPort:    6000,
@@ -488,60 +516,64 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 		{
 			desc: "missing SrcIP",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "SrcIP",
 		},
 		{
 			desc: "missing DstIPStart",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				NumDstIP:            1,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				NumDstIP:                1,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "DstIPStart",
 		},
 		{
 			desc: "missing NumDstIP",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				EgressATEIPv6:       validCfg.EgressATEIPv6,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				EgressATEIPv6:           validCfg.EgressATEIPv6,
 			},
 			wantSubErrStr: "NumDstIP",
 		},
 		{ // Added test case
 			desc: "missing EgressATEIPv6",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
 				// EgressATEIPv6:    "", // Missing
 			},
 			wantSubErrStr: "EgressATEIPv6 must be provided",
@@ -549,16 +581,17 @@ func TestGenerateScaleProfileEntries(t *testing.T) {
 		{ // Added test case
 			desc: "invalid EgressATEIPv6",
 			cfg: &ScaleProfileConfig{
-				AddrFamily:          "ipv6",
-				NetworkInstanceName: fakedevice.DefaultNetworkInstance,
-				NumPrefixes:         10,
-				NumNexthopGroup:     10,
-				NumNexthopPerNHG:    1,
-				PrefixStart:         validCfg.PrefixStart,
-				SrcIP:               validCfg.SrcIP,
-				DstIPStart:          validCfg.DstIPStart,
-				NumDstIP:            1,
-				EgressATEIPv6:       "not-an-ip", // Invalid
+				AddrFamily:              "ipv6",
+				NumNetworkInstances:     1,
+				NetworkInstanceBaseName: fakedevice.DefaultNetworkInstance,
+				NumPrefixes:             10,
+				NumNexthopGroup:         10,
+				NumNexthopPerNHG:        1,
+				PrefixStart:             validCfg.PrefixStart,
+				SrcIP:                   validCfg.SrcIP,
+				DstIPStart:              validCfg.DstIPStart,
+				NumDstIP:                1,
+				EgressATEIPv6:           "not-an-ip", // Invalid
 			},
 			wantSubErrStr: "invalid EgressATEIPv6",
 		},

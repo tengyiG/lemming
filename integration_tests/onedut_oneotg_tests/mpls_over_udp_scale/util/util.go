@@ -27,16 +27,19 @@ import (
 	"time"
 
 	"github.com/openconfig/gribigo/fluent"
+
+	"github.com/openconfig/lemming/gnmi/fakedevice"
 )
 
 // ScaleProfileConfig defines the parameters for generating gRIBI entries for a specific scale profile.
 type ScaleProfileConfig struct {
 	// Common parameters
-	AddrFamily          string // "ipv6"
-	NetworkInstanceName string // Network instance name. Required.
-	NumPrefixes         int    // Total number of IP prefixes (AFT entries) to generate
-	NumNexthopGroup     int    // Total number of Next Hop Groups (NHGs) to generate
-	NumNexthopPerNHG    int    // Number of Next Hops (NHs) per NHG
+	AddrFamily              string // "ipv6"
+	NumNetworkInstances     int    // Number of network instances to generate (e.g., 1 or 1024)
+	NetworkInstanceBaseName string // Base name for network instances (e.g., "DEFAULT" or "VRF"). NI names will be "base-1", "base-2", etc.
+	NumPrefixes             int    // Total number of IP prefixes (AFT entries) to generate
+	NumNexthopGroup         int    // Total number of Next Hop Groups (NHGs) to generate
+	NumNexthopPerNHG        int    // Number of Next Hops (NHs) per NHG
 
 	// Prefix generation details
 	PrefixStart string // Starting IP prefix (e.g., "10.5.1.1/32" or "2001:aa:bb::1/128")
@@ -138,11 +141,12 @@ func MPLSLabelToPacketBytes(label uint32) []byte {
 	return buf
 }
 
-// populateNextHops generates NextHop entries and returns the updated slice.
-func (cfg *ScaleProfileConfig)populateNextHops() ([]fluent.GRIBIEntry, error) {
-	totalNextHops := cfg.NumNexthopPerNHG * cfg.NumNexthopGroup
+// populateNextHops generates NextHop entries for a specific network instance.
+// nhIndexOffset ensures global uniqueness of NH indices across NIs.
+// niIndex is the 0-based index of the network instance being populated.
+func (cfg *ScaleProfileConfig) populateNextHops(niName string, niIndex int, numNHsThisNI int, nhIndexOffset uint64) ([]fluent.GRIBIEntry, error) {
 	entries := []fluent.GRIBIEntry{}
-	if totalNextHops <= 0 {
+	if numNHsThisNI <= 0 {
 		return entries, nil
 	}
 
@@ -165,24 +169,25 @@ func (cfg *ScaleProfileConfig)populateNextHops() ([]fluent.GRIBIEntry, error) {
 		return nil, errors.New("NumDstIP must be positive to generate destination IPs")
 	}
 
-	for i := 1; i <= totalNextHops; i++ {
+	for i := 1; i <= numNHsThisNI; i++ {
+		globalNHIndex := nhIndexOffset + uint64(i)
 		mplsLabel := cfg.MPLSLabelStart
 		if !cfg.UseSameMPLSLabel {
-			mplsLabel = cfg.MPLSLabelStart + uint64(i-1)
+			// Assign label based on the VRF index for unique label per VRF profiles
+			mplsLabel = cfg.MPLSLabelStart + uint64(niIndex)
 		}
 
 		nhEntry := fluent.NextHopEntry().
-			WithNetworkInstance(cfg.NetworkInstanceName).
-			WithIndex(uint64(i)).
+			WithNetworkInstance(niName).
+			WithIndex(globalNHIndex).
 			WithIPAddress(cfg.EgressATEIPv6).
 			AddEncapHeader(
 				fluent.MPLSEncapHeader().WithLabels(mplsLabel),
-				// TODO: fluent currently doesn't support UDPV4 encap header builder. Support fluent.UDPV4EncapHeader to allow ipv4 support here.
 				fluent.UDPV6EncapHeader().
 					WithDstUDPPort(cfg.UDPDstPort).
 					WithSrcUDPPort(cfg.UDPSrcPort).
 					WithSrcIP(cfg.SrcIP).
-					WithDstIP(dstIPs[(i-1)%cfg.NumDstIP]).
+					WithDstIP(dstIPs[(int(globalNHIndex)-1)%cfg.NumDstIP]).
 					WithDSCP(cfg.DSCP).
 					WithIPTTL(cfg.IPTTL),
 			)
@@ -206,86 +211,96 @@ func combinationKey(indices []uint64) string {
 	return sb.String()
 }
 
-// populateNextHopGroups generates NextHopGroup entries, ensuring unique combinations of NHs per NHG.
-func (cfg *ScaleProfileConfig) populateNextHopGroups() ([]fluent.GRIBIEntry, error) {
-	totalNHsAvailable := cfg.NumNexthopPerNHG * cfg.NumNexthopGroup
+// populateNextHopGroups generates NextHopGroup entries for a specific network instance.
+// nhgIDOffset ensures global uniqueness of NHG IDs across NIs.
+// nhIndexOffset is needed to correctly reference the globally unique NH indices.
+func (cfg *ScaleProfileConfig) populateNextHopGroups(niName string, numNHGsThisNI int, numNHsPerGroup int, nhgIDOffset uint64, nhIndexOffset uint64) ([]fluent.GRIBIEntry, error) {
+	numNHsThisNI := cfg.NumNexthopPerNHG * cfg.NumNexthopGroup
 	k := cfg.NumNexthopPerNHG
 	entries := []fluent.GRIBIEntry{}
 
-	// 1. Create a slice of all available NH indices
-	allNHIndices := make([]uint64, totalNHsAvailable)
-	for i := 0; i < totalNHsAvailable; i++ {
-		allNHIndices[i] = uint64(i + 1)
+	if numNHGsThisNI <= 0 {
+		return entries, nil
 	}
 
-	// 2. Shuffle the indices randomly
+	// 1. Create a slice of available NH indices *for this NI* (using global offset)
+	niNHIndices := make([]uint64, numNHsThisNI)
+	for i := 0; i < numNHsThisNI; i++ {
+		niNHIndices[i] = nhIndexOffset + uint64(i+1)
+	}
+
+	// 2. Shuffle the indices randomly (within this NI's pool)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	r.Shuffle(len(allNHIndices), func(i, j int) {
-		allNHIndices[i], allNHIndices[j] = allNHIndices[j], allNHIndices[i]
+	r.Shuffle(len(niNHIndices), func(i, j int) {
+		niNHIndices[i], niNHIndices[j] = niNHIndices[j], niNHIndices[i]
 	})
 
-	// 3. Assign indices ensuring unique combinations
+	// 3. Assign indices ensuring unique combinations *within this NI*
 	usedCombinations := make(map[string]bool)
-	currentIndex := 0 // Starting index for the sliding window in allNHIndices
 
-	for nhgIdx := uint64(1); nhgIdx <= uint64(cfg.NumNexthopGroup); nhgIdx++ {
+	for localNHGIdx := uint64(1); localNHGIdx <= uint64(numNHGsThisNI); localNHGIdx++ {
+		globalNHGId := nhgIDOffset + localNHGIdx
 		foundCombination := false
-		for currentIndex+k <= totalNHsAvailable {
-			indSlice := allNHIndices[currentIndex : currentIndex+k]
+		for comboStartIndex := 0; comboStartIndex+k <= numNHsThisNI; comboStartIndex++ {
+			indSlice := make([]uint64, k)
+			copy(indSlice, niNHIndices[comboStartIndex:comboStartIndex+k])
+
 			key := combinationKey(indSlice)
 
 			if !usedCombinations[key] {
 				usedCombinations[key] = true
 				nhgEntry := fluent.NextHopGroupEntry().
-					WithNetworkInstance(cfg.NetworkInstanceName).
-					WithID(nhgIdx)
-				finalIndSlice := make([]uint64, k)
-				copy(finalIndSlice, indSlice)
-				for _, nhIndex := range finalIndSlice {
-					nhgEntry.AddNextHop(nhIndex, 1) // Weight is 1 for now
+					WithNetworkInstance(niName).
+					WithID(globalNHGId)
+
+				for _, nhIndex := range niNHIndices[comboStartIndex : comboStartIndex+k] {
+					nhgEntry.AddNextHop(nhIndex, 1)
 				}
 				entries = append(entries, nhgEntry)
 
-				currentIndex += 1
 				foundCombination = true
 				break
 			}
-			currentIndex++
+
 		}
 
 		if !foundCombination {
-			return nil, fmt.Errorf("failed to find unique NH combination for NHG ID %d after checking all possibilities. (n=%d, k=%d, groups=%d)", nhgIdx, totalNHsAvailable, k, cfg.NumNexthopGroup)
+			return nil, fmt.Errorf("failed to find unique NH combination for NI %s, NHG local index %d (global ID %d). (n=%d, k=%d, groups=%d)", niName, localNHGIdx, globalNHGId, numNHsThisNI, k, numNHGsThisNI)
 		}
 	}
 
 	return entries, nil
 }
 
-// populatePrefixes generates IPv4 or IPv6 entries based on the configuration.
-func (cfg *ScaleProfileConfig)populatePrefixes() ([]fluent.GRIBIEntry, error) {
+// populatePrefixes generates IPv4 or IPv6 entries for a specific network instance.
+// nhgIDOffset is needed to correctly reference the globally unique NHG IDs.
+// numPrefixesThisNI specifies how many prefixes to generate for this specific NI.
+// numNHGsPerNI is needed for the modulo calculation to map prefixes to NHGs within this NI.
+func (cfg *ScaleProfileConfig) populatePrefixes(niName string, numPrefixesThisNI int, numNHGsPerNI int, nhgIDOffset uint64) ([]fluent.GRIBIEntry, error) {
 	entries := []fluent.GRIBIEntry{}
 
-	for i := 0; i < cfg.NumPrefixes; i++ {
-		prefixStr, err := GeneratePrefix(cfg.PrefixStart, i) // Use the helper function
+	for i := 0; i < numPrefixesThisNI; i++ {
+		// Generate prefix based on index 'i' *within this NI*.
+		// This achieves reuse as index 'i' repeats for each NI.
+		prefixStr, err := GeneratePrefix(cfg.PrefixStart, i)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate prefix at index %d: %w", i, err)
+			return nil, fmt.Errorf("failed to generate prefix at index %d for NI %s: %w", i, niName, err)
 		}
 
-		// Assign NHG ID in a round-robin fashion
-		nhgID := uint64(i%cfg.NumNexthopGroup + 1)
+		// Map prefix to a local NHG index within this NI using modulo.
+		localNHGIndex := uint64(i%numNHGsPerNI + 1)
+		globalNHGId := nhgIDOffset + localNHGIndex // Calculate the global NHG ID
 
 		var entry fluent.GRIBIEntry
 		switch cfg.AddrFamily {
 		case "ipv6":
 			entry = fluent.IPv6Entry().
-				WithNetworkInstance(cfg.NetworkInstanceName).
+				WithNetworkInstance(niName).
 				WithPrefix(prefixStr).
-				WithNextHopGroup(nhgID)
+				WithNextHopGroup(globalNHGId)
 		case "ipv4":
-			// TODO: Add fluent.UDPV4EncapHeader() support first.
 			return nil, fmt.Errorf("ipv4 entry generation not yet implemented")
 		default:
-			// Should not happen due to validation
 			return nil, fmt.Errorf("internal error: unsupported AddrFamily %q", cfg.AddrFamily)
 		}
 		entries = append(entries, entry)
@@ -297,8 +312,11 @@ func (cfg *ScaleProfileConfig)populatePrefixes() ([]fluent.GRIBIEntry, error) {
 // GenerateScaleProfileEntries randomly generates fluent gRIBI entries based on ScaleProfileConfig in one network instance.
 func GenerateScaleProfileEntries(ctx context.Context, cfg *ScaleProfileConfig) ([]fluent.GRIBIEntry, error) {
 	// 1. Validation of the parameters.
-	if cfg.NetworkInstanceName == "" {
-		return nil, errors.New("NetworkInstanceName must be given")
+	if cfg.NumNetworkInstances <= 0 {
+		return nil, errors.New("NumNetworkInstances must be positive")
+	}
+	if cfg.NetworkInstanceBaseName == "" {
+		return nil, errors.New("NetworkInstanceBaseName must be provided")
 	}
 	if cfg.NumPrefixes <= 0 {
 		return nil, errors.New("NumPrefixes must be positive")
@@ -339,29 +357,67 @@ func GenerateScaleProfileEntries(ctx context.Context, cfg *ScaleProfileConfig) (
 	if _, err := netip.ParseAddr(cfg.EgressATEIPv6); err != nil {
 		return nil, fmt.Errorf("invalid EgressATEIPv6 %q: %w", cfg.EgressATEIPv6, err)
 	}
-
-	// 2. Initialize basic information.
-	entries := []fluent.GRIBIEntry{}
-
-	// 3. Generates next hops.
-	nhs, err := cfg.populateNextHops()
-	if err != nil {
-		return nil, fmt.Errorf("failed to populate next hops: %w", err)
+	if cfg.NumNetworkInstances > 1 && cfg.NetworkInstanceBaseName == fakedevice.DefaultNetworkInstance {
+		return nil, fmt.Errorf("cannot use default NI name %q as base when NumNetworkInstances > 1", fakedevice.DefaultNetworkInstance)
 	}
-	entries = append(entries, nhs...)
-
-	// 4. Generates next hop groups.
-	nhgs, err := cfg.populateNextHopGroups()
-	if err != nil {
-		return nil, fmt.Errorf("failed to populate next hop groups: %w", err)
+	if !cfg.UseSameMPLSLabel && cfg.NumNetworkInstances > 1 && (cfg.MPLSLabelStart+uint64(cfg.NumNetworkInstances) > (1 << 20)) {
+		// Check if MPLS labels might exceed 20-bit limit
+		return nil, fmt.Errorf("MPLS label range might exceed 20 bits with %d instances starting from %d", cfg.NumNetworkInstances, cfg.MPLSLabelStart)
 	}
-	entries = append(entries, nhgs...)
-
-	// 5. Generates prefixes (AFT entries).
-	prefixEntries, err := cfg.populatePrefixes()
-	if err != nil {
-		return nil, fmt.Errorf("failed to populate prefixes: %w", err)
+	// Ensure total counts are divisible or handle remainders if necessary
+	if cfg.NumPrefixes%cfg.NumNetworkInstances != 0 {
+		return nil, fmt.Errorf("total NumPrefixes (%d) must be divisible by NumNetworkInstances (%d)", cfg.NumPrefixes, cfg.NumNetworkInstances)
 	}
-	entries = append(entries, prefixEntries...)
-	return entries, nil
+	if cfg.NumNexthopGroup%cfg.NumNetworkInstances != 0 {
+		return nil, fmt.Errorf("total NumNexthopGroup (%d) must be divisible by NumNetworkInstances (%d)", cfg.NumNexthopGroup, cfg.NumNetworkInstances)
+	}
+	totalNHs := cfg.NumNexthopGroup * cfg.NumNexthopPerNHG
+	if totalNHs%cfg.NumNetworkInstances != 0 {
+		return nil, fmt.Errorf("total NHs (%d * %d = %d) must be divisible by NumNetworkInstances (%d)", cfg.NumNexthopGroup, cfg.NumNexthopPerNHG, totalNHs, cfg.NumNetworkInstances)
+	}
+
+	// 2. Initialize
+	allEntries := []fluent.GRIBIEntry{}
+	// Calculate per-NI counts
+	numPrefixesPerNI := cfg.NumPrefixes / cfg.NumNetworkInstances
+	numNHGsPerNI := cfg.NumNexthopGroup / cfg.NumNetworkInstances
+	numNHsPerNI := totalNHs / cfg.NumNetworkInstances
+	numNHsPerGroup := cfg.NumNexthopPerNHG
+
+	// 3. Loop through Network Instances
+	for niIndex := 0; niIndex < cfg.NumNetworkInstances; niIndex++ {
+		var niName string
+		if niIndex == 0 {
+			// The first instance (index 0) is always DEFAULT
+			niName = fakedevice.DefaultNetworkInstance
+		} else {
+			// Subsequent instances use BaseName-1, BaseName-2, ... (using niIndex as the 1-based suffix)
+			niName = fmt.Sprintf("%s-%d", cfg.NetworkInstanceBaseName, niIndex)
+		}
+
+		// Calculate offsets for global uniqueness based on per-NI counts
+		nhIndexOffset := uint64(niIndex * numNHsPerNI)
+		nhgIDOffset := uint64(niIndex * numNHGsPerNI)
+
+		// Generate entries for this NI using per-NI counts
+		nhs, err := cfg.populateNextHops(niName, niIndex, numNHsPerNI, nhIndexOffset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to populate next hops for NI %s (index %d): %w", niName, niIndex, err)
+		}
+		allEntries = append(allEntries, nhs...)
+
+		nhgs, err := cfg.populateNextHopGroups(niName, numNHGsPerNI, numNHsPerGroup, nhgIDOffset, nhIndexOffset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to populate next hop groups for NI %s (index %d): %w", niName, niIndex, err)
+		}
+		allEntries = append(allEntries, nhgs...)
+
+		prefixEntries, err := cfg.populatePrefixes(niName, numPrefixesPerNI, numNHGsPerNI, nhgIDOffset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to populate prefixes for NI %s (index %d): %w", niName, niIndex, err)
+		}
+		allEntries = append(allEntries, prefixEntries...)
+	}
+
+	return allEntries, nil
 }
