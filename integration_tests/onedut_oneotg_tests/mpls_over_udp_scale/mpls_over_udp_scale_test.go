@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"net/netip"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -746,26 +747,17 @@ func TestMPLSOverUDPScale(t *testing.T) {
 
 			// 7. Delete Entries
 			t.Logf("Sending DELETE operations for %d entries...", len(entries))
-			// Reverse the order for deletion: Prefixes -> NHGs -> NHs
-			// The 'entries' slice currently has NHs, then NHGs, then Prefixes.
-			prefixStartIdx := tc.config.NumNexthopGroup*tc.config.NumNexthopPerNHG + tc.config.NumNexthopGroup
-			nhgStartIdx := tc.config.NumNexthopGroup * tc.config.NumNexthopPerNHG
-
-			deleteEntries := []fluent.GRIBIEntry{}
-			deleteEntries = append(deleteEntries, entries[prefixStartIdx:]...)            // Prefixes
-			deleteEntries = append(deleteEntries, entries[nhgStartIdx:prefixStartIdx]...) // NHGs
-			deleteEntries = append(deleteEntries, entries[:nhgStartIdx]...)               // NHs
-
+			slices.Reverse(entries)
 			totalSent = 0
-			for i := 0; i < len(deleteEntries); i += gribiBatchSize {
+			for i := 0; i < len(entries); i += gribiBatchSize {
 				end := i + gribiBatchSize
-				if end > len(deleteEntries) {
-					end = len(deleteEntries)
+				if end > len(entries) {
+					end = len(entries)
 				}
-				batch := deleteEntries[i:end]
+				batch := entries[i:end]
 				totalSent += len(batch)
-				t.Logf("Sending DELETE batch %d/%d (%d entries, total sent: %d)", (i/gribiBatchSize)+1, (len(deleteEntries)+gribiBatchSize-1)/gribiBatchSize, len(batch), totalSent)
-				c.Modify().DeleteEntry(t, batch...) // Use DeleteEntry with the correct entries
+				t.Logf("Sending DELETE batch %d/%d (%d entries, total sent: %d)", (i/gribiBatchSize)+1, (len(entries)+gribiBatchSize-1)/gribiBatchSize, len(batch), totalSent)
+				c.Modify().DeleteEntry(t, batch...)
 				batchTimeout := 3 * time.Minute
 				if err := awaitTimeout(ctx, c, t, batchTimeout); err != nil {
 					t.Errorf("Await got error for DELETE batch %d: %v", (i/gribiBatchSize)+1, err)
