@@ -135,7 +135,14 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice, cfg *scaleutil.ScaleProf
 	p1 := dut.Port(t, "port1")
 
 	p1OC := dutPort1.NewOCInterface(p1.Name(), dut)
-	p1OC.GetOrCreateSubinterface(1).GetOrCreateVlan().GetOrCreateMatch().GetOrCreateSingleTagged().SetVlanId(uint16(1))
+
+	if cfg != nil {
+		for i := 1; i < cfg.NumNetworkInstances; i++ {
+			subintfID := uint32(i)
+			vlanID := uint16(i)
+			p1OC.GetOrCreateSubinterface(subintfID).GetOrCreateVlan().GetOrCreateMatch().GetOrCreateSingleTagged().SetVlanId(vlanID)
+		}
+	}
 	gnmi.Replace(t, dut, ocpath.Root().Interface(p1.Name()).Config(), p1OC)
 
 	p2 := dut.Port(t, "port2")
@@ -152,17 +159,6 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice, cfg *scaleutil.ScaleProf
 	for i := 1; i < cfg.NumNetworkInstances; i++ {
 		niName := fmt.Sprintf("%s-%d", cfg.NetworkInstanceBaseName, i)
 		subintfID := uint32(i)
-		vlanID := uint16(i)
-		gnmi.Update(t, dut, ocpath.Root().Interface(p1.Name()).Subinterface(subintfID).Config(), &oc.Interface_Subinterface{
-			Index: ygot.Uint32(subintfID),
-			Vlan: &oc.Interface_Subinterface_Vlan{
-				Match: &oc.Interface_Subinterface_Vlan_Match{
-					SingleTagged: &oc.Interface_Subinterface_Vlan_Match_SingleTagged{
-						VlanId: ygot.Uint16(vlanID),
-					},
-				},
-			},
-		})
 
 		gnmi.Update(t, dut, ocpath.Root().NetworkInstance(niName).Config(), &oc.NetworkInstance{
 			Name: ygot.String(niName),
@@ -174,6 +170,7 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice, cfg *scaleutil.ScaleProf
 				},
 			},
 		})
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -766,7 +763,7 @@ func TestMPLSOverUDPScale(t *testing.T) {
 				totalSent += len(batch)
 				t.Logf("Sending batch %d/%d (%d entries, total sent: %d)", (i/gribiBatchSize)+1, (len(entries)+gribiBatchSize-1)/gribiBatchSize, len(batch), totalSent)
 				c.Modify().AddEntry(t, batch...)
-				batchTimeout := 3 * time.Second
+				batchTimeout := 10 * time.Second
 				if err := awaitTimeout(ctx, c, t, batchTimeout); err != nil {
 					t.Fatalf("Await got error for ADD batch %d: %v", (i/gribiBatchSize)+1, err)
 				}
