@@ -141,10 +141,10 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice, cfg *scaleutil.ScaleProf
 	p2 := dut.Port(t, "port2")
 	gnmi.Replace(t, dut, ocpath.Root().Interface(p2.Name()).Config(), dutPort2.NewOCInterface(p2.Name(), dut))
 
-	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port1").Name()).Subinterface(0).Ipv4().Address(dutPort1.IPv4).Ip().State(), time.Minute, dutPort1.IPv4)
-	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port2").Name()).Subinterface(0).Ipv4().Address(dutPort2.IPv4).Ip().State(), time.Minute, dutPort2.IPv4)
-	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port1").Name()).Subinterface(0).Ipv6().Address(dutPort1.IPv6).Ip().State(), time.Minute, dutPort1.IPv6)
-	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port2").Name()).Subinterface(0).Ipv6().Address(dutPort2.IPv6).Ip().State(), time.Minute, dutPort2.IPv6)
+	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port1").Name()).Subinterface(0).Ipv4().Address(dutPort1.IPv4).Ip().State(), 10*time.Second, dutPort1.IPv4)
+	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port2").Name()).Subinterface(0).Ipv4().Address(dutPort2.IPv4).Ip().State(), 10*time.Second, dutPort2.IPv4)
+	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port1").Name()).Subinterface(0).Ipv6().Address(dutPort1.IPv6).Ip().State(), 10*time.Second, dutPort1.IPv6)
+	gnmi.Await(t, dut, ocpath.Root().Interface(dut.Port(t, "port2").Name()).Subinterface(0).Ipv6().Address(dutPort2.IPv6).Ip().State(), 10*time.Second, dutPort2.IPv6)
 
 	if cfg == nil {
 		return
@@ -205,7 +205,7 @@ func WaitForARP(t *testing.T, otg *otg.OTG, c gosnappi.Config, ipType string) {
 		switch ipType {
 		case "IPv4":
 			statePath := gnmi.OTG().Interface(intf).Ipv4NeighborAny().LinkLayerAddress().State()
-			_, ok := gnmi.WatchAll(t, otg, statePath, 2*time.Minute, func(val *ygnmi.Value[string]) bool {
+			_, ok := gnmi.WatchAll(t, otg, statePath, 10*time.Second, func(val *ygnmi.Value[string]) bool {
 				return val.IsPresent()
 			}).Await(t)
 			if !ok {
@@ -213,7 +213,7 @@ func WaitForARP(t *testing.T, otg *otg.OTG, c gosnappi.Config, ipType string) {
 			}
 		case "IPv6":
 			statePath := gnmi.OTG().Interface(intf).Ipv6NeighborAny().LinkLayerAddress().State()
-			_, ok := gnmi.WatchAll(t, otg, statePath, 2*time.Minute, func(val *ygnmi.Value[string]) bool {
+			_, ok := gnmi.WatchAll(t, otg, statePath, 10*time.Second, func(val *ygnmi.Value[string]) bool {
 				return val.IsPresent()
 			}).Await(t)
 			if !ok {
@@ -750,7 +750,7 @@ func TestMPLSOverUDPScale(t *testing.T) {
 			c.Start(ctx, t)
 			defer c.Stop(t)
 			c.StartSending(ctx, t)
-			if err := awaitTimeout(ctx, c, t, 2*time.Minute); err != nil {
+			if err := awaitTimeout(ctx, c, t, 10*time.Second); err != nil {
 				t.Fatalf("Await got error during session negotiation: %v", err)
 			}
 
@@ -766,7 +766,7 @@ func TestMPLSOverUDPScale(t *testing.T) {
 				totalSent += len(batch)
 				t.Logf("Sending batch %d/%d (%d entries, total sent: %d)", (i/gribiBatchSize)+1, (len(entries)+gribiBatchSize-1)/gribiBatchSize, len(batch), totalSent)
 				c.Modify().AddEntry(t, batch...)
-				batchTimeout := 3 * time.Minute
+				batchTimeout := 3 * time.Second
 				if err := awaitTimeout(ctx, c, t, batchTimeout); err != nil {
 					t.Fatalf("Await got error for ADD batch %d: %v", (i/gribiBatchSize)+1, err)
 				}
@@ -833,7 +833,7 @@ func TestMPLSOverUDPScale(t *testing.T) {
 				totalSent += len(batch)
 				t.Logf("Sending DELETE batch %d/%d (%d entries, total sent: %d)", (i/gribiBatchSize)+1, (len(entries)+gribiBatchSize-1)/gribiBatchSize, len(batch), totalSent)
 				c.Modify().DeleteEntry(t, batch...)
-				batchTimeout := 3 * time.Minute
+				batchTimeout := 3 * time.Second
 				if err := awaitTimeout(ctx, c, t, batchTimeout); err != nil {
 					t.Errorf("Await got error for DELETE batch %d: %v", (i/gribiBatchSize)+1, err)
 				}
